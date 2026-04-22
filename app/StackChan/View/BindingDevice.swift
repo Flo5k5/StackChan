@@ -250,12 +250,9 @@ struct ScanningEquipment : View {
     }
     
     private func getBlueAndWifiInfo() {
-        NEHotspotNetwork.fetchCurrent { network in
-            if let network = network {
-                wifiName = network.ssid
-                focusedField = .Password
-            }
-        }
+        // NEHotspotNetwork.fetchCurrent requires the "Access Wi-Fi Information"
+        // capability, which is not granted on free Apple IDs. We skip the SSID
+        // prefill and let the user type the Wi-Fi name manually.
         BlufiUtil.shared.startScan()
     }
     
