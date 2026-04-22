@@ -6,8 +6,10 @@
 
 struct Urls {
     
-    // Base URL configured according to the server's IP
-    static let url = "192.168.51.43:12800/"
+    // Base URL configured according to the server's IP.
+    // rpi5-lab is reachable via Tailscale MagicDNS from the iPhone, so this
+    // works both at home (LAN) and remotely (Tailnet).
+    static let url = "rpi5-lab:12800/"
     
     static func getBaseUrl() -> String {
         return "http://" + url + "stackChan/"
