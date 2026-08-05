@@ -7,38 +7,26 @@ package dance
 
 import (
 	"context"
-	"encoding/json"
-	"stackChan/internal/dao"
 	"stackChan/internal/model"
-	"stackChan/internal/model/do"
-	"stackChan/internal/model/entity"
-	"strconv"
+	"stackChan/internal/service"
 
 	"github.com/gogf/gf/v2/errors/gcode"
 	"github.com/gogf/gf/v2/errors/gerror"
+	"github.com/gogf/gf/v2/frame/g"
 
 	"stackChan/api/dance/v1"
 )
 
 func (c *ControllerV1) GetList(ctx context.Context, req *v1.GetListReq) (res *v1.GetListRes, err error) {
-	danceMap := make(map[string][]model.DanceData)
-	var list []entity.DeviceDance
-	err = dao.DeviceDance.Ctx(ctx).Where(do.DeviceDance{
-		Mac: req.Mac,
-	}).Scan(&list)
+	mac := g.RequestFromCtx(ctx).GetCtxVar(model.Mac).String()
+	if mac == "" {
+		return nil, gerror.NewCode(gcode.CodeInvalidParameter)
+	}
+
+	danceList, err := service.GetOrCreateDanceList(ctx, mac, "file/music/stackchan_music.mp3")
 	if err != nil {
 		return nil, err
 	}
-	if len(list) > 0 {
-		deviceDance := list[0]
-		var danceList []model.DanceData
-		err = json.Unmarshal([]byte(deviceDance.DanceData), &danceList)
-		if err != nil {
-			return nil, gerror.WrapCode(gcode.CodeInvalidParameter, err)
-		}
-		key := strconv.Itoa(deviceDance.DanceIndex)
-		danceMap[key] = danceList
-	}
-	response := v1.GetListRes(danceMap)
-	return &response, nil
+
+	return new(v1.GetListRes(danceList)), nil
 }

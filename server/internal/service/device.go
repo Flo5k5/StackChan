@@ -10,24 +10,42 @@ import (
 	"stackChan/internal/dao"
 	"stackChan/internal/model/do"
 	"stackChan/internal/model/entity"
+
+	"github.com/gogf/gf/v2/database/gdb"
+	"github.com/gogf/gf/v2/errors/gcode"
+	"github.com/gogf/gf/v2/errors/gerror"
 )
 
 func CreateMacIfNotExists(ctx context.Context, mac string) (id int64, err error) {
-	count, err := dao.Device.Ctx(ctx).Where("mac = ?", mac).Count()
-	if err != nil {
+	if err = validateMac(mac); err != nil {
 		return 0, err
 	}
-	if count > 0 {
-		return 0, nil
-	}
-	id, err = dao.Device.Ctx(ctx).Data(do.Device{
-		Mac: mac,
-	}).InsertAndGetId()
 
+	_, err = dao.Device.Ctx(ctx).Data(do.Device{
+		Mac: mac,
+	}).InsertIgnore()
 	if err != nil {
 		return 0, err
 	}
-	return id, nil
+	return 0, nil
+}
+
+func CreateMacIfNotExistsWithTx(ctx context.Context, tx gdb.TX, mac string) error {
+	if err := validateMac(mac); err != nil {
+		return err
+	}
+
+	_, err := dao.Device.Ctx(ctx).TX(tx).Data(do.Device{
+		Mac: mac,
+	}).InsertIgnore()
+	return err
+}
+
+func validateMac(mac string) error {
+	if mac == "" {
+		return gerror.NewCode(gcode.CodeMissingParameter, "Device MAC address cannot be empty")
+	}
+	return nil
 }
 
 func GetDeviceName(ctx context.Context, mac string) (name string, err error) {

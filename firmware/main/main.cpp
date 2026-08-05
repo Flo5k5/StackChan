@@ -26,33 +26,38 @@ extern "C" void app_main(void)
     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
     ui_hal::on_get_tick([]() { return GetHAL().millis(); });
 
-    // Install apps
-    GetMooncake().installApp(std::make_unique<AppLauncher>());
-    GetMooncake().installApp(std::make_unique<AppAiAgent>());
-    GetMooncake().installApp(std::make_unique<AppAvatar>());
-    GetMooncake().installApp(std::make_unique<AppEspnowControl>());
-    GetMooncake().installApp(std::make_unique<AppAppCenter>());
+    const bool skip_mooncake =
+        GetHAL().getXiaozhiConfig().startAiAgentOnBoot && GetHAL().getWarmRebootTarget() < 0;
+
+    if (!skip_mooncake) {
+        // Install apps
+        GetMooncake().installApp(std::make_unique<AppLauncher>());
+        GetMooncake().installApp(std::make_unique<AppAiAgent>());
+        GetMooncake().installApp(std::make_unique<AppAvatar>());
+        GetMooncake().installApp(std::make_unique<AppEspnowControl>());
+        GetMooncake().installApp(std::make_unique<AppAppCenter>());
 #if CONFIG_USE_EZDATA
-    GetMooncake().installApp(std::make_unique<AppEzdata>());
+        GetMooncake().installApp(std::make_unique<AppEzdata>());
 #endif
-    GetMooncake().installApp(std::make_unique<AppDance>());
-    GetMooncake().installApp(std::make_unique<AppSetup>());
+        GetMooncake().installApp(std::make_unique<AppDance>());
+        GetMooncake().installApp(std::make_unique<AppSetup>());
 
-    // Main loop
-    while (1) {
-        GetHAL().feedTheDog();
-        GetHAL().updateHeapStatusLog();
+        // Main loop
+        while (1) {
+            GetHAL().feedTheDog();
+            GetHAL().updateHeapStatusLog();
 
-        GetMooncake().update();
+            GetMooncake().update();
 
-        if (GetHAL().isXiaozhiStartRequested()) {
-            break;
+            if (GetHAL().isXiaozhiStartRequested()) {
+                break;
+            }
         }
-    }
 
-    // Uninstall all apps and destroy mooncake
-    GetMooncake().uninstallAllApps();
-    DestroyMooncake();
+        // Uninstall all apps and destroy mooncake
+        GetMooncake().uninstallAllApps();
+        DestroyMooncake();
+    }
 
     // Start xiaozhi, never returns
     GetHAL().startXiaozhi();

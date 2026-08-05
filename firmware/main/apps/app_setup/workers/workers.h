@@ -9,6 +9,7 @@
 #include <uitk/short_namespace.hpp>
 #include <hal/hal.h>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string_view>
 
@@ -164,6 +165,38 @@ private:
  * @brief
  *
  */
+class MicTestWorker : public WorkerBase {
+public:
+    MicTestWorker();
+    ~MicTestWorker();
+    void update() override;
+
+private:
+    void update_button_text();
+    void update_button_state();
+    void update_button_color();
+    void update_waveform();
+
+    std::unique_ptr<uitk::lvgl_cpp::Container> _panel;
+    std::unique_ptr<uitk::lvgl_cpp::Chart> _chart_waveform;
+    std::unique_ptr<uitk::lvgl_cpp::Button> _btn_test;
+    std::unique_ptr<uitk::lvgl_cpp::Button> _btn_back;
+
+    MicTestStatus _status        = MicTestStatus::Done;
+    bool _test_flag              = false;
+    bool _back_flag              = false;
+    bool _is_testing             = false;
+    int _waveform_series         = -1;
+    uint8_t _original_volume     = 80;
+    uint32_t _last_waveform_tick = 0;
+    std::string _error_message;
+    std::vector<int16_t> _waveform_frame;
+};
+
+/**
+ * @brief
+ *
+ */
 class StartupWorker : public WorkerBase {
 public:
     class PageStartup {
@@ -240,7 +273,9 @@ private:
     std::unique_ptr<uitk::lvgl_cpp::Label> _label_brightness;
     std::unique_ptr<uitk::lvgl_cpp::Slider> _slider;
     std::unique_ptr<uitk::lvgl_cpp::Button> _btn_confirm;
-    int32_t _target_brightness = -1;
+    uint8_t _original_brightness = 0;
+    int32_t _target_brightness   = -1;
+    bool _confirmed              = false;
 };
 
 /**
@@ -259,7 +294,65 @@ private:
     std::unique_ptr<uitk::lvgl_cpp::Slider> _slider;
     std::unique_ptr<uitk::lvgl_cpp::Button> _btn_confirm;
     std::vector<uint8_t> _volume_levels;
-    int32_t _target_volume = -1;
+    uint8_t _original_volume = 0;
+    int32_t _target_volume   = -1;
+    bool _confirmed          = false;
+};
+
+/**
+ * @brief
+ *
+ */
+class XiaozhiPowerSavingWorker : public WorkerBase {
+public:
+    XiaozhiPowerSavingWorker();
+    void update() override;
+
+private:
+    void update_idle_label();
+
+    std::unique_ptr<uitk::lvgl_cpp::Container> _panel;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _panel_idle_shutdown;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _panel_charging;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _label_idle_title;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _label_idle_value;
+    std::unique_ptr<uitk::lvgl_cpp::Slider> _slider_idle_shutdown;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _label_charging_title;
+    std::unique_ptr<uitk::lvgl_cpp::Switch> _switch_charging;
+    std::unique_ptr<uitk::lvgl_cpp::Button> _btn_confirm;
+
+    XiaozhiConfig_t _config;
+    std::vector<uint32_t> _idle_shutdown_levels;
+    int32_t _pending_idle_index = -1;
+    bool _confirm_flag          = false;
+};
+
+/**
+ * @brief
+ *
+ */
+class XiaozhiGeneralWorker : public WorkerBase {
+public:
+    XiaozhiGeneralWorker();
+    void update() override;
+
+private:
+    void update_idle_motion_label();
+
+    std::unique_ptr<uitk::lvgl_cpp::Container> _panel;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _panel_general;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _panel_startup;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _label_idle_motion_title;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _label_idle_motion_value;
+    std::unique_ptr<uitk::lvgl_cpp::Slider> _slider_idle_motion;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _label_startup_title;
+    std::unique_ptr<uitk::lvgl_cpp::Switch> _switch_start_ai_on_boot;
+    std::unique_ptr<uitk::lvgl_cpp::Button> _btn_confirm;
+
+    XiaozhiConfig_t _config;
+    std::vector<uint8_t> _idle_motion_levels;
+    int32_t _pending_idle_motion_index = -1;
+    bool _confirm_flag                 = false;
 };
 
 /**
@@ -286,7 +379,7 @@ private:
  */
 class FactoryResetWorker : public WorkerBase {
 public:
-    FactoryResetWorker();
+    FactoryResetWorker(std::function<void()> beforeResetAction = {});
     ~FactoryResetWorker();
     void update() override;
 
@@ -300,6 +393,7 @@ private:
     int _confirm_count = 0;
     bool _cancel_flag  = false;
     bool _confirm_flag = false;
+    std::function<void()> _before_reset_action;
 
     void update_ui();
 };

@@ -71,11 +71,31 @@ void AppSetup::onOpen()
               }}},
         },
         {
+            "AI.Agent",
+            {{"General",
+              [&]() {
+                  _destroy_menu    = true;
+                  _need_warm_reset = true;
+                  _worker          = std::make_unique<XiaozhiGeneralWorker>();
+              }},
+             {"Power Saving",
+              [&]() {
+                  _destroy_menu    = true;
+                  _need_warm_reset = true;
+                  _worker          = std::make_unique<XiaozhiPowerSavingWorker>();
+              }}},
+        },
+        {
             "Hardware Test",
             {{"Servo",
               [&]() {
                   _destroy_menu = true;
                   _worker       = std::make_unique<ZeroCalibrationWorker>();
+              }},
+             {"Microphone",
+              [&]() {
+                  _destroy_menu = true;
+                  _worker       = std::make_unique<MicTestWorker>();
               }},
              {"RGB Strip",
               [&]() {

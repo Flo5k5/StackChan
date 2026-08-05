@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
+ *
+ * SPDX-License-Identifier: MIT
+ */
 #include "M5Unified.h"
 
 extern "C" {
@@ -71,7 +76,9 @@ void app_main(void)
     }
 
     M5.begin();
-    M5.Imu.init(&M5.In_I2C);  // init IMU with internal I2C port
+    M5.Power.begin();
+    M5.Lcd.setBrightness(100);  // set brightness to 100
+    M5.Imu.init(&M5.In_I2C);    // init IMU with internal I2C port
     printf("IN_I2C port: %d\n", M5.In_I2C.getPort());
     printf("M5 Display width: %ld, height: %ld\n", M5.Display.width(), M5.Display.height());
 

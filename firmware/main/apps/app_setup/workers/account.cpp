@@ -35,7 +35,9 @@ AccountWorker::PanelInfo::PanelInfo(lv_obj_t* parent, int posY, std::string_view
     _label_info->setTextColor(lv_color_hex(0x07162C));
     _label_info->align(LV_ALIGN_CENTER, 0, 14);
     _label_info->setWidth(270);
+    _label_info->setHeight(30);
     _label_info->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    _label_info->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
     _label_info->setText(info);
 }
 
@@ -120,8 +122,7 @@ void AccountWorker::update()
             mclog::tagInfo(_tag, "unbind clicked");
             _page_account.reset();
 
-            // Unbind account
-            {
+            _worker_reset = std::make_unique<FactoryResetWorker>([]() {
                 auto loading_page = std::make_unique<view::LoadingPage>(0xF6F6F6, 0x26206A);
                 GetHAL().lvglUnlock();
 
@@ -135,10 +136,7 @@ void AccountWorker::update()
                 }
 
                 GetHAL().lvglLock();
-            }
-
-            // Factory reset
-            _worker_reset = std::make_unique<FactoryResetWorker>();
+            });
         } else if (_page_account->isQuitClicked()) {
             mclog::tagInfo(_tag, "quit clicked");
             _is_done = true;
