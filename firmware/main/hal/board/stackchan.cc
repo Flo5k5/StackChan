@@ -197,26 +197,15 @@ public:
 
     bool UpdateTouchPoint()
     {
-        auto err = TryReadRegs(0x02, read_buffer_, 6);
-        if (err != ESP_OK) {
-            tp_.num = 0;
-            tp_.x   = -1;
-            tp_.y   = -1;
-
-            consecutive_failures_++;
-            int64_t now_us = esp_timer_get_time();
-            if (last_error_log_us_ == 0 || (now_us - last_error_log_us_) >= 1000 * 1000) {
-                ESP_LOGW(TAG, "FT6336 read failed (%s), skipped %lu sample(s)", esp_err_to_name(err),
-                         static_cast<unsigned long>(consecutive_failures_));
-                last_error_log_us_ = now_us;
-            }
-            return false;
-        }
-
-        consecutive_failures_ = 0;
-        tp_.num               = read_buffer_[0] & 0x0F;
-        tp_.x                 = ((read_buffer_[1] & 0x0F) << 8) | read_buffer_[2];
-        tp_.y                 = ((read_buffer_[3] & 0x0F) << 8) | read_buffer_[4];
+        // NOTE (2026-08-05): upstream v1.2.6 (commit afd7260) introduced a call to
+        // `TryReadRegs` for I2C error handling, but the xiaozhi-esp32 sibling
+        // pinned at v2.2.4 only exposes `ReadRegs` (void). Falling back to the
+        // pre-merge behavior: read without error handling. To restore upstream's
+        // anti-crash logic, bump the sibling to a version exposing TryReadRegs.
+        ReadRegs(0x02, read_buffer_, 6);
+        tp_.num = read_buffer_[0] & 0x0F;
+        tp_.x   = ((read_buffer_[1] & 0x0F) << 8) | read_buffer_[2];
+        tp_.y   = ((read_buffer_[3] & 0x0F) << 8) | read_buffer_[4];
         return true;
     }
 
@@ -228,8 +217,6 @@ public:
 private:
     uint8_t* read_buffer_ = nullptr;
     TouchPoint_t tp_;
-    int64_t last_error_log_us_     = 0;
-    uint32_t consecutive_failures_ = 0;
 };
 
 class M5StackCoreS3Board : public WifiBoard {
