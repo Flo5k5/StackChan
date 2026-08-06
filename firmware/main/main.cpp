@@ -41,6 +41,7 @@ extern "C" void app_main(void)
 #endif
         GetMooncake().installApp(std::make_unique<AppDance>());
         GetMooncake().installApp(std::make_unique<AppSetup>());
+        GetMooncake().installApp(std::make_unique<AppClaudeCode>());
 
         // Main loop
         while (1) {

@@ -55,6 +55,12 @@ public:
         DanceSequence     = 0x14,
         StartAudioStream  = 0x18,
         StopAudioStream   = 0x19,
+        // Claude Code session event from the laptop hook bridge. Payload (after
+        // the standard [Type(1)][Length(4)] header) is a JSON object forwarded
+        // verbatim from ai-agent-notify.sh via POST /stackChan/claude-event
+        // (see server/internal/web_socket/claude_event.go). Consumed by the
+        // on-device AppClaudeCode to render the live session state.
+        ClaudeEvent       = 0x1B,
     };
 
     struct ReceivedMessage {
@@ -365,6 +371,20 @@ public:
                     break;
                 }
                 case DataType::StopAudioStream: {
+                    break;
+                }
+                case DataType::ClaudeEvent: {
+                    // Protocol: [Type(1)][Length(4)][JSON payload]
+                    // The payload is forwarded verbatim from ai-agent-notify.sh
+                    // (see server/internal/web_socket/claude_event.go). The
+                    // AppClaudeCode subscribes to onWsClaudeEvent to render
+                    // the live session state. We keep the parsing minimal here
+                    // (raw JSON string) so the wire format can evolve without
+                    // firmware changes — the app owns the schema.
+                    if (msg.data.size() > 5) {
+                        std::string payload(msg.data.begin() + 5, msg.data.end());
+                        GetHAL().onWsClaudeEvent.emit(payload);
+                    }
                     break;
                 }
                 default:

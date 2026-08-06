@@ -249,6 +249,11 @@ public:
     uitk::Signal<bool> onWsVideoModeChange;
     uitk::Signal<std::shared_ptr<LvglImage>> onWsVideoFrame;
     uitk::Signal<std::string_view> onWsDanceData;
+    // Claude Code session event from the laptop hook bridge (see
+    // hal_ws_avatar.cpp DataType::ClaudeEvent). Payload is a raw JSON string
+    // forwarded verbatim from ai-agent-notify.sh. The AppClaudeCode subscribes
+    // to render the live session state (sleep/idle/busy/attention).
+    uitk::Signal<std::string_view> onWsClaudeEvent;
     uitk::Signal<CommonLogLevel, std::string_view> onWsLog;
 
     void startWebSocketAvatarService(std::function<void(std::string_view)> onStartLog);
