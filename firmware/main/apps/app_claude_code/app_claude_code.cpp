@@ -9,10 +9,14 @@
 #include <mooncake_log.h>
 #include <ArduinoJson.h>
 #include <smooth_lvgl.hpp>
+#include <board.h>
+#include "hal/utils/secret_logic/secret_logic.h"
+#include "stackchan/avatar/decorators/decorators.h"
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 
 using namespace mooncake;
 using namespace smooth_ui_toolkit::lvgl_cpp;
@@ -57,7 +61,21 @@ struct AppClaudeCode::Impl {
     std::string last_tool;         // tool_name (for permission_request)
     std::string last_host;         // laptop hostname
     std::string last_cwd;          // session cwd
+    std::string last_session_id;   // Claude Code session id (used to route approve/deny back via HTTP)
     bool dirty = false;            // true when a new payload arrived and UI must refresh
+
+    // Permission decision UI (Phase 3). Two LVGL buttons shown only when the
+    // state is ATTENTION (permission_request received with a session_id).
+    // Tapping a button POSTs to /stackChan/claude-permission and clears the
+    // attention state.
+    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Button> btn_approve;
+    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Button> btn_deny;
+    bool attention_active = false;  // guards against double-send / stale buttons
+    std::string pending_session_id;  // session_id captured on attention, used by the button handler
+
+    // Phase 3.5 visual feedback: heart (approve) / angry (deny) decorator.
+    // Held briefly so the LVGL object outlives its animation, then released.
+    std::unique_ptr<stackchan::avatar::Decorator> decorator_holder;
 };
 
 namespace {
@@ -178,6 +196,7 @@ void AppClaudeCode::onOpen() {
         _p->last_tool  = doc["tool_name"] | "";
         _p->last_host  = doc["host"] | "";
         _p->last_cwd   = doc["cwd"]  | "";
+        _p->last_session_id = doc["session_id"] | "";
         _p->dirty = true;
     };
     GetHAL().onWsClaudeEvent.connect(on_event);
@@ -193,7 +212,7 @@ void AppClaudeCode::onRunning() {
         return;
     }
 
-    std::string event, msg, tool, host, cwd;
+    std::string event, msg, tool, host, cwd, session_id;
     {
         std::lock_guard<std::mutex> lock(_p->data_mutex);
         if (!_p->dirty) return;
@@ -203,6 +222,7 @@ void AppClaudeCode::onRunning() {
         tool.swap(_p->last_tool);
         host.swap(_p->last_host);
         cwd.swap(_p->last_cwd);
+        session_id.swap(_p->last_session_id);
     }
 
     const auto info = deriveState(event);
@@ -236,6 +256,122 @@ void AppClaudeCode::onRunning() {
         meta += (pos == std::string::npos) ? cwd : cwd.substr(pos + 1);
     }
     _p->meta_label->setText(meta.c_str());
+
+    // Phase 3: show approve/deny buttons when a permission prompt is blocking
+    // AND we have a session_id to route the decision back to the laptop hook.
+    // Hide them in every other state. Buttons are (re)created on demand so
+    // they don't intercept taps during sleep/idle/busy.
+    const bool need_attention_ui =
+        (info.state == ClaudeState::Attention) && !session_id.empty();
+    if (need_attention_ui && !_p->attention_active) {
+        _p->attention_active = true;
+        _p->pending_session_id = session_id;
+
+        _p->btn_approve = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Button>(*_p->panel);
+        _p->btn_approve->setSize(130, 50);
+        _p->btn_approve->setAlign(LV_ALIGN_BOTTOM_LEFT);
+        _p->btn_approve->setPos(10, -40);
+        _p->btn_approve->setBgColor(lv_color_hex(0xA6E3A1));  // green (Catppuccin)
+        _p->btn_approve->label().setText("Approve");
+        _p->btn_approve->label().setTextFont(&lv_font_montserrat_16);
+        _p->btn_approve->label().setTextColor(lv_color_hex(0x1E1E2E));
+        _p->btn_approve->onClick().connect([this]() { sendPermissionDecision("once"); });
+
+        _p->btn_deny = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Button>(*_p->panel);
+        _p->btn_deny->setSize(130, 50);
+        _p->btn_deny->setAlign(LV_ALIGN_BOTTOM_RIGHT);
+        _p->btn_deny->setPos(-10, -40);
+        _p->btn_deny->setBgColor(lv_color_hex(0xF38BA8));  // red (Catppuccin)
+        _p->btn_deny->label().setText("Deny");
+        _p->btn_deny->label().setTextFont(&lv_font_montserrat_16);
+        _p->btn_deny->label().setTextColor(lv_color_hex(0x1E1E2E));
+        _p->btn_deny->onClick().connect([this]() { sendPermissionDecision("deny"); });
+    } else if (!need_attention_ui && _p->attention_active) {
+        // Leaving attention state: tear down the buttons.
+        _p->btn_deny.reset();
+        _p->btn_approve.reset();
+        _p->attention_active = false;
+        _p->pending_session_id.clear();
+    }
+}
+
+void AppClaudeCode::sendPermissionDecision(const std::string& decision) {
+    // Snapshot the session id under the lock so the POST uses a consistent
+    // value even if a new event arrives while we're still building the body.
+    std::string session_id;
+    {
+        std::lock_guard<std::mutex> lock(_p->data_mutex);
+        session_id = _p->pending_session_id;
+    }
+    if (session_id.empty()) {
+        mclog::tagWarn(kTag, "permission decision requested but no session_id available");
+        return;
+    }
+
+    // Tear down the buttons immediately so the user sees the tap registered.
+    // The state will refresh on the next event from the hook (allow -> stop,
+    // deny -> the laptop exits the turn so we'll see a stop or nothing).
+    {
+        LvglLockGuard lock;
+        _p->btn_deny.reset();
+        _p->btn_approve.reset();
+        _p->attention_active = false;
+        _p->pending_session_id.clear();
+
+        // Phase 3.5: spawn a short-lived decorator as visual confirmation.
+        // HeartDecorator (approve) or AngryDecorator (deny), self-destroy
+        // after 800ms via their built-in lifetime mechanism.
+        if (decision == "once") {
+            _p->decorator_holder = std::make_unique<stackchan::avatar::HeartDecorator>(
+                lv_screen_active(), /*destroyAfterMs=*/800, /*animationIntervalMs=*/300);
+        } else {
+            _p->decorator_holder = std::make_unique<stackchan::avatar::AngryDecorator>(
+                lv_screen_active(), /*destroyAfterMs=*/800, /*animationIntervalMs=*/300);
+        }
+        // Release the holder after 1s — the decorator self-destroys its LVGL
+        // object, we just need to drop our unique_ptr to avoid double-free.
+        // Schedule via a detached thread (no FreeRTOS timer plumbing here).
+        std::thread([this]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+            LvglLockGuard lock;
+            _p->decorator_holder.reset();
+        }).detach();
+    }
+
+    // POST /stackChan/claude-permission {session_id, decision} in a worker
+    // thread so we don't block the LVGL task. The hook script on the laptop
+    // is long-polling /claude-permission/poll and will pick this up.
+    std::thread([this, session_id, decision]() {
+        try {
+            auto& board  = Board::GetInstance();
+            auto network = board.GetNetwork();
+            auto http    = network->CreateHttp(0);
+            if (!http) {
+                mclog::tagWarn(kTag, "permission POST: CreateHttp failed");
+                return;
+            }
+            const auto token = secret_logic::generate_auth_token();
+            const auto url   = secret_logic::get_server_url() + "/stackChan/claude-permission";
+
+            // Tiny JSON body — cJSON is already available in the firmware.
+            std::string body = "{\"session_id\":\"" + session_id +
+                               "\",\"decision\":\"" + decision + "\"}";
+            http->SetHeader("Content-Type", "application/json");
+            http->SetHeader("Authorization", token.c_str());
+            http->SetContent(std::move(body));
+            if (!http->Open("POST", url)) {
+                mclog::tagWarn(kTag, "permission POST: Open failed");
+                return;
+            }
+            const int status = http->GetStatusCode();
+            http->Close();
+            mclog::tagInfo(kTag, "permission POST %s -> HTTP %d (session %s)",
+                           decision.c_str(), status, session_id.c_str());
+        } catch (...) {
+            // Network failures are non-fatal — the laptop hook has its own
+            // timeout and will fall back to the native prompt.
+        }
+    }).detach();
 }
 
 void AppClaudeCode::onClose() {
@@ -249,6 +385,11 @@ void AppClaudeCode::onClose() {
 
     {
         LvglLockGuard lock;
+        // Phase 3 cleanup: permission UI + decorator (must be destroyed before
+        // panel since they were parented to it / the active screen).
+        _p->decorator_holder.reset();
+        _p->btn_deny.reset();
+        _p->btn_approve.reset();
         _p->hint_label.reset();
         _p->meta_label.reset();
         _p->message_label.reset();

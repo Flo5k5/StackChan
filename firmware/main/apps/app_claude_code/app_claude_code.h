@@ -29,6 +29,13 @@ public:
     void onClose() override;
 
 private:
+    // Phase 3: POST an approve/deny decision to /stackChan/claude-permission
+    // so the laptop hook (long-polling) can resume or abort the turn. Runs
+    // the HTTP call in a detached worker thread; safe to call from the LVGL
+    // task (button onClick callback). `decision` is "once" (approve) or "deny".
+    void sendPermissionDecision(const std::string& decision);
+
+private:
     struct Impl;
     std::unique_ptr<Impl> _p;
 };

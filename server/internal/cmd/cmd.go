@@ -78,6 +78,12 @@ var (
 				// via ClaudeEvent (0x1B) WS frame. Auth reuses TokenAuthMiddleware.
 				// See web_socket.ClaudeEventHandler for the wire contract.
 				group.POST("/claude-event", web_socket.ClaudeEventHandler)
+
+				// Claude Code permission decision bridge: device POSTs its
+				// approve/deny, laptop hook long-polls for the answer.
+				// See web_socket/claude_permission.go.
+				group.POST("/claude-permission", web_socket.ClaudePermissionPostHandler)
+				group.GET("/claude-permission/poll", web_socket.ClaudePermissionPollHandler)
 			})
 
 			s.Group("/admin/stackChan", func(group *ghttp.RouterGroup) {
