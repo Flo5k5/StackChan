@@ -59,6 +59,14 @@ const (
 	OffAudio byte = 0x19
 
 	AimedTakePhoto byte = 0x1A
+
+	// ClaudeEvent pushes a Claude Code status update (JSON payload) to StackChan
+	// devices so the on-device "Claude Code" app can render the live state of a
+	// remote session (sleep/idle/busy/attention/celebrate + counters + entries).
+	// Source: ai-agent-notify.sh hook on the laptop → POST /stackChan/claude-event
+	// → BroadcastClaudeEvent → this WS frame. Wire format mirrors the Anthropic
+	// claude-desktop-buddy heartbeat (REFERENCE.md).
+	ClaudeEvent byte = 0x1B
 )
 
 var (

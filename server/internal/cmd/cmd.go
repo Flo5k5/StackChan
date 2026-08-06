@@ -73,6 +73,11 @@ var (
 			s.Group("/stackChan", func(group *ghttp.RouterGroup) {
 				group.Middleware(middleware.TokenAuthMiddleware, ghttp.MiddlewareHandlerResponse)
 				group.Bind(device.NewV1(), friend.NewV1(), dance.NewV1(), file.NewV1(), post.NewV1(), pano.NewV1(), appstore.NewV1(), xiaozhi.NewV1(), stackchandevice.NewV2())
+
+				// Claude Code bridge: laptop hook → broadcast to StackChan devices
+				// via ClaudeEvent (0x1B) WS frame. Auth reuses TokenAuthMiddleware.
+				// See web_socket.ClaudeEventHandler for the wire contract.
+				group.POST("/claude-event", web_socket.ClaudeEventHandler)
 			})
 
 			s.Group("/admin/stackChan", func(group *ghttp.RouterGroup) {
