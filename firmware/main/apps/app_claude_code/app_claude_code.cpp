@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "app_claude_code.h"
+#include "claude_stats.h"
 #include <hal/hal.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
@@ -12,6 +13,8 @@
 #include <board.h>
 #include "hal/utils/secret_logic/secret_logic.h"
 #include "stackchan/avatar/decorators/decorators.h"
+#include "assets/claude_bufo/bufo_images.h"
+#include "libs/gif/lv_gif.h"
 #include <memory>
 #include <mutex>
 #include <string>
@@ -34,6 +37,10 @@ inline lv_color_t ColorAccent() { return lv_color_hex(0x89B4FA); }  // blue (idl
 inline lv_color_t ColorBusy()   { return lv_color_hex(0xF9E2AF); }  // yellow (busy)
 inline lv_color_t ColorAttn()   { return lv_color_hex(0xF38BA8); }  // red (attention)
 inline lv_color_t ColorMuted()  { return lv_color_hex(0x6C7086); }  // gray (sleep/labels)
+
+// 4-state display model mirroring the Anthropic claude-desktop-buddy state
+// machine. Declared early so the Impl struct can reference it.
+enum class ClaudeState { Sleep, Idle, Busy, Attention, Celebrate };
 }  // namespace
 
 // Pimpl-backed state. All LVGL widgets and the cached payload live behind a
@@ -76,6 +83,19 @@ struct AppClaudeCode::Impl {
     // Phase 3.5 visual feedback: heart (approve) / angry (deny) decorator.
     // Held briefly so the LVGL object outlives its animation, then released.
     std::unique_ptr<stackchan::avatar::Decorator> decorator_holder;
+
+    // Phase 4: animated character (bufo). The gif object is parented to the
+    // panel and lives for the whole app lifetime; we swap its source when the
+    // derived state changes. A celebrate burst overrides the state-driven
+    // source for 3s on level-up.
+    lv_obj_t* character_gif = nullptr;
+    ClaudeState current_gif_state = ClaudeState::Sleep;  // tracks the last src set
+    uint32_t last_tokens_today = 0;                       // for level-up detection
+    int64_t celebrate_until_ms = 0;                       // 0 = no active celebrate burst
+
+    // Phase 4 stat tracking: when ATTENTION started, so we can measure the
+    // time-to-decide and feed recordApproval's velocity EMA.
+    int64_t attention_started_ms = 0;
 };
 
 namespace {
@@ -85,7 +105,6 @@ namespace {
 // We don't have a real heartbeat yet (counters + entries will come in Phase 4
 // via an enriched server payload); for now we derive the state from the event
 // name forwarded by ai-agent-notify.sh.
-enum class ClaudeState { Sleep, Idle, Busy, Attention };
 
 struct StateInfo {
     ClaudeState state;
@@ -105,6 +124,18 @@ StateInfo deriveState(const std::string& event) {
     }
     // Unknown event: treat as idle but keep last state visible.
     return {ClaudeState::Idle, "IDLE", ColorAccent()};
+}
+
+// Map a derived state to the matching bufo GIF descriptor.
+// Celebrate is handled separately as a transient overlay (see onRunning).
+const lv_image_dsc_t* gifForState(ClaudeState state) {
+    switch (state) {
+        case ClaudeState::Sleep:     return &bufo_sleep;
+        case ClaudeState::Idle:      return &bufo_idle;
+        case ClaudeState::Busy:      return &bufo_busy;
+        case ClaudeState::Attention: return &bufo_attention;
+        default:                     return &bufo_idle;
+    }
 }
 
 }  // namespace
@@ -138,6 +169,14 @@ void AppClaudeCode::onOpen() {
         _p->panel->setBgColor(ColorBg());
         _p->panel->setBgOpa(255);
         _p->panel->setPaddingAll(8);
+
+        // Phase 4: animated character (bufo, 96x100). Top-left corner, leaves
+        // the right ~210px for the HUD. Created once; onRunning swaps the src.
+        _p->character_gif = lv_gif_create(_p->panel->get());
+        lv_gif_set_color_format(_p->character_gif, LV_COLOR_FORMAT_RGB565);
+        lv_obj_set_pos(_p->character_gif, 6, 24);
+        lv_gif_set_src(_p->character_gif, &bufo_sleep);
+        _p->current_gif_state = ClaudeState::Sleep;
 
         _p->title = std::make_unique<Label>(*_p->panel);
         _p->title->setText("Claude Code");
@@ -197,6 +236,9 @@ void AppClaudeCode::onOpen() {
         _p->last_host  = doc["host"] | "";
         _p->last_cwd   = doc["cwd"]  | "";
         _p->last_session_id = doc["session_id"] | "";
+        // Phase 4: tokens_today is present only on heartbeat payloads (BLE
+        // path) or enriched WS payloads. Missing -> 0 (no level-up check).
+        _p->last_tokens_today = doc["tokens_today"] | 0;
         _p->dirty = true;
     };
     GetHAL().onWsClaudeEvent.connect(on_event);
@@ -213,6 +255,7 @@ void AppClaudeCode::onRunning() {
     }
 
     std::string event, msg, tool, host, cwd, session_id;
+    uint32_t tokens_today = 0;
     {
         std::lock_guard<std::mutex> lock(_p->data_mutex);
         if (!_p->dirty) return;
@@ -223,6 +266,14 @@ void AppClaudeCode::onRunning() {
         host.swap(_p->last_host);
         cwd.swap(_p->last_cwd);
         session_id.swap(_p->last_session_id);
+        tokens_today = _p->last_tokens_today;
+    }
+
+    // Phase 4: detect level-up before drawing so we can trigger a celebrate
+    // burst even if the state itself didn't change. Non-blocking: only the
+    // first crossing of each 50K boundary fires.
+    if (tokens_today > 0 && app_claude_code::maybeLevelUp(tokens_today)) {
+        _p->celebrate_until_ms = GetHAL().millis() + 3000;  // 3s burst
     }
 
     const auto info = deriveState(event);
@@ -230,6 +281,25 @@ void AppClaudeCode::onRunning() {
     LvglLockGuard lock;
     _p->state_label->setText(info.label);
     _p->state_label->setTextColor(info.color);
+
+    // Phase 4: swap the bufo GIF when the derived state changes, or when a
+    // celebrate burst is active. We track the last state to avoid calling
+    // lv_gif_set_src every frame (it resets the animation).
+    const int64_t now_ms = GetHAL().millis();
+    const bool celebrating = _p->celebrate_until_ms > 0 && now_ms < _p->celebrate_until_ms;
+    if (celebrating && _p->current_gif_state != ClaudeState::Celebrate) {
+        // Synthesize a pseudo-state so the tracker doesn't keep re-setting src.
+        lv_gif_set_src(_p->character_gif, &bufo_celebrate);
+        _p->current_gif_state = ClaudeState::Celebrate;
+    } else if (!celebrating) {
+        if (_p->celebrate_until_ms > 0 && now_ms >= _p->celebrate_until_ms) {
+            _p->celebrate_until_ms = 0;  // burst expired
+        }
+        if (_p->current_gif_state != info.state) {
+            lv_gif_set_src(_p->character_gif, gifForState(info.state));
+            _p->current_gif_state = info.state;
+        }
+    }
 
     // Build the message line: use msg if present, else synthesize from event.
     std::string display_msg = msg;
@@ -266,6 +336,7 @@ void AppClaudeCode::onRunning() {
     if (need_attention_ui && !_p->attention_active) {
         _p->attention_active = true;
         _p->pending_session_id = session_id;
+        _p->attention_started_ms = GetHAL().millis();  // for velocity EMA
 
         _p->btn_approve = std::make_unique<smooth_ui_toolkit::lvgl_cpp::Button>(*_p->panel);
         _p->btn_approve->setSize(130, 50);
@@ -306,6 +377,23 @@ void AppClaudeCode::sendPermissionDecision(const std::string& decision) {
     if (session_id.empty()) {
         mclog::tagWarn(kTag, "permission decision requested but no session_id available");
         return;
+    }
+
+    // Phase 4: persist the decision into NVS-backed stats. Velocity is the
+    // time elapsed between ATTENTION appearing and the user tapping Approve.
+    // Denies don't track velocity. Run this before tearing down the buttons
+    // so we still have attention_started_ms.
+    {
+        const int64_t decided_ms = GetHAL().millis();
+        const uint32_t decision_time_s =
+            _p->attention_started_ms > 0
+                ? static_cast<uint32_t>((decided_ms - _p->attention_started_ms) / 1000)
+                : 0;
+        if (decision == "once") {
+            app_claude_code::recordApproval(decision_time_s);
+        } else {
+            app_claude_code::recordDeny();
+        }
     }
 
     // Tear down the buttons immediately so the user sees the tap registered.
@@ -385,6 +473,12 @@ void AppClaudeCode::onClose() {
 
     {
         LvglLockGuard lock;
+        // Phase 4 cleanup: GIF character (raw lv_obj_t*, manual delete). Must
+        // happen before the panel is reset since the gif is parented to it.
+        if (_p->character_gif) {
+            lv_obj_del(_p->character_gif);
+            _p->character_gif = nullptr;
+        }
         // Phase 3 cleanup: permission UI + decorator (must be destroyed before
         // panel since they were parented to it / the active screen).
         _p->decorator_holder.reset();
