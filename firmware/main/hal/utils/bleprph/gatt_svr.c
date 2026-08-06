@@ -28,6 +28,7 @@
 #include "bleprph.h"
 #include "services/ans/ble_svc_ans.h"
 #include "esp_heap_caps.h"
+#include "../claude_protocol/claude_nus.h"  // sibling folder under hal/utils/
 
 /*** Maximum number of characteristics with the notify flag ***/
 #define MAX_NOTIFY 5
@@ -354,6 +355,27 @@ int gatt_svr_init(bool use_alt_uuid)
     rc = ble_gatts_add_svcs(gatt_svr_svcs);
     if (rc != 0) {
         return rc;
+    }
+
+    /* Register the Claude Code Nordic UART Service (NUS) alongside the
+     * StackChan iOS services. The NUS lives in its own translation unit
+     * (claude_nus.c) and exposes its service table via claude_nus_svc_def().
+     * Both services coexist on the same peripheral — NimBLE broadcasts
+     * notifications per-characteristic, so there is no cross-talk between
+     * iOS (StackChan service) and the Claude desktop app (NUS service). */
+    const struct ble_gatt_svc_def *claude_nus_svcs = claude_nus_svc_def();
+    if (claude_nus_svcs) {
+        rc = ble_gatts_count_cfg(claude_nus_svcs);
+        if (rc != 0) {
+            MODLOG_DFLT(ERROR, "Failed to count Claude NUS services: %d\n", rc);
+            return rc;
+        }
+        rc = ble_gatts_add_svcs(claude_nus_svcs);
+        if (rc != 0) {
+            MODLOG_DFLT(ERROR, "Failed to add Claude NUS services: %d\n", rc);
+            return rc;
+        }
+        MODLOG_DFLT(INFO, "Claude NUS service registered\n");
     }
 
     /* Initialize Stack-Chan data with empty JSON */

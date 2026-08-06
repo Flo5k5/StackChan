@@ -5,6 +5,7 @@
  */
 #include "hal.h"
 #include "utils/bleprph/bleprph.h"
+#include "utils/claude_protocol/claude_bridge.h"
 #include "utils/secret_logic/secret_logic.h"
 #include <ArduinoJson.hpp>
 #include <algorithm>
@@ -318,6 +319,13 @@ void Hal::ble_init(bool useAltUuid)
     stackchan_ble_register_callbacks(&ble_callbacks);
 
     ble_prph_init(useAltUuid);
+
+    /* Wire the Claude Code BLE NUS transport into the onWsClaudeEvent signal
+     * so AppClaudeCode sees a uniform event stream regardless of source
+     * (BLE push from the Claude desktop app, or HTTP bridge from
+     * ai-agent-notify.sh via the server). ble_prph_init above registered the
+     * NUS GATT service via gatt_svr_init -> claude_nus_svc_def(). */
+    claude_bridge_init();
 
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_EFUSE_FACTORY);
